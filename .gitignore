@@ -45,3 +45,5 @@ app.*.map.json
 # Firebase config files (مهمة عشان ما تنرفع)
 android/app/google-services.json
 ios/Runner/GoogleService-Info.plist
+# Local properties (API keys, SDK paths, etc.)
+/android/local.properties
