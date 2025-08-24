@@ -15,22 +15,25 @@ class _AuthScreenState extends State<AuthScreen>
   final _auth = AuthService();
 
   static const _backgroundColor = Color(0xFFF5F5F5);
-  static const _primaryColor = Color(0xFF1A237E);
-  static const _accentColor = Color(0xFF64B5F6);
+  static const _primaryColor   = Color(0xFF1A237E);
+  static const _accentColor    = Color(0xFF64B5F6);
 
+  // Controllers
   final _loginEmail = TextEditingController();
   final _loginPassword = TextEditingController();
-
   final _regEmail = TextEditingController();
   final _regPassword = TextEditingController();
   final _regConfirm = TextEditingController();
 
+  // Form keys
   final _loginFormKey = GlobalKey<FormState>();
   final _regFormKey = GlobalKey<FormState>();
 
+  // Loading states
   bool _isLoginLoading = false;
   bool _isRegLoading = false;
 
+  // Obscure toggles
   bool _loginObscure = true;
   bool _regObscure = true;
   bool _regConfirmObscure = true;
@@ -52,7 +55,10 @@ class _AuthScreenState extends State<AuthScreen>
     super.dispose();
   }
 
+  // ================= إجراءات المصادقة =================
+
   Future<void> _handleLogin() async {
+    if (_isLoginLoading) return;
     if (!_loginFormKey.currentState!.validate()) return;
 
     setState(() => _isLoginLoading = true);
@@ -61,18 +67,25 @@ class _AuthScreenState extends State<AuthScreen>
         email: _loginEmail.text.trim(),
         password: _loginPassword.text.trim(),
       );
+
       if (!mounted) return;
+      // نمرر successMessage لشاشة العملاء
       Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => const CustomerListScreen()),
+        MaterialPageRoute(
+          builder: (_) => const CustomerListScreen(
+            successMessage: 'تم تسجيل الدخول بنجاح',
+          ),
+        ),
       );
     } catch (e) {
-      _showError('تعذّر تسجيل الدخول: $e');
+      _showError(_asNiceMessage(e, fallback: 'تعذّر تسجيل الدخول.'));
     } finally {
       if (mounted) setState(() => _isLoginLoading = false);
     }
   }
 
   Future<void> _handleRegister() async {
+    if (_isRegLoading) return;
     if (!_regFormKey.currentState!.validate()) return;
 
     if (_regPassword.text.trim() != _regConfirm.text.trim()) {
@@ -86,55 +99,96 @@ class _AuthScreenState extends State<AuthScreen>
         email: _regEmail.text.trim(),
         password: _regPassword.text.trim(),
       );
+
       if (!mounted) return;
+
+      // رسالة تنبيه بسيطة عن إرسال التحقق (لو مفعل)
+      ScaffoldMessenger.of(context).clearSnackBars();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('تم إنشاء الحساب. إذا لزم، تم إرسال رسالة تفعيل إلى بريدك.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+
+      // الانتقال مع successMessage
       Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => const CustomerListScreen()),
+        MaterialPageRoute(
+          builder: (_) => const CustomerListScreen(
+            successMessage: 'تم إنشاء الحساب بنجاح',
+          ),
+        ),
       );
     } catch (e) {
-      _showError('تعذّر إنشاء الحساب: $e');
+      _showError(_asNiceMessage(e, fallback: 'تعذّر إنشاء الحساب.'));
     } finally {
       if (mounted) setState(() => _isRegLoading = false);
     }
   }
 
-  /// دالة إرسال رابط إعادة تعيين كلمة المرور
+  /// إرسال رابط "نسيت كلمة المرور"
   Future<void> _handleForgotPassword() async {
-    if (_loginEmail.text.trim().isEmpty) {
+    final email = _loginEmail.text.trim();
+    if (email.isEmpty) {
       _showError('الرجاء إدخال البريد الإلكتروني أولاً');
       return;
     }
     try {
-      await _auth.resetPassword(_loginEmail.text.trim());
+      await _auth.resetPassword(email);
       if (!mounted) return;
+      ScaffoldMessenger.of(context).clearSnackBars();
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('تم إرسال رابط إعادة التعيين إلى بريدك الإلكتروني')),
+        const SnackBar(
+          content: Text('تم إرسال رابط إعادة التعيين إلى بريدك الإلكتروني'),
+          behavior: SnackBarBehavior.floating,
+        ),
       );
     } catch (e) {
-      _showError('تعذّر إرسال الرابط: $e');
+      _showError(_asNiceMessage(e, fallback: 'تعذّر إرسال الرابط.'));
     }
   }
 
-  void _showError(String msg) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  // ================= أدوات مساعدة =================
+
+  String _asNiceMessage(Object e, {required String fallback}) {
+    // إن كان SimpleAuthException نعرض الرسالة العربية فقط
+    if (e is SimpleAuthException) return e.message;
+    final txt = e.toString();
+    // إزالة البادئات الطويلة المحتملة
+    final neat = txt.replaceFirst('Exception: ', '').replaceFirst('FirebaseAuthException:', '').trim();
+    return neat.isEmpty ? fallback : neat;
+    // ملاحظة: SimpleAuthException مُعرّف داخل auth_service.dart
   }
+
+  void _showError(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).clearSnackBars();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(msg), behavior: SnackBarBehavior.floating),
+    );
+  }
+
+  // ================= الواجهة =================
 
   @override
   Widget build(BuildContext context) {
-    return Directionality(
+    return Directionality( // ضمان الاتجاه العربي
       textDirection: TextDirection.rtl,
       child: Scaffold(
         backgroundColor: _backgroundColor,
         appBar: AppBar(
           backgroundColor: _primaryColor,
           elevation: 0,
-          title: const Text('مرحبًا بك',
-              style: TextStyle(fontFamily: 'Cairo', fontSize: 20, color: Colors.white)),
+          title: const Text(
+            'مرحبًا بك',
+            style: TextStyle(fontFamily: 'Cairo', fontSize: 20, color: Colors.white),
+          ),
           bottom: TabBar(
             controller: _tabController,
             indicatorColor: _accentColor,
             tabs: const [
               Tab(child: Text('تسجيل الدخول', style: TextStyle(fontFamily: 'Cairo'))),
-              Tab(child: Text('إنشاء حساب', style: TextStyle(fontFamily: 'Cairo'))),
+              Tab(child: Text('إنشاء حساب',  style: TextStyle(fontFamily: 'Cairo'))),
             ],
           ),
         ),
@@ -175,13 +229,14 @@ class _AuthScreenState extends State<AuthScreen>
                 ),
                 validator: _passwordValidator,
               ),
-              // زر "نسيت كلمة المرور؟"
               Align(
                 alignment: Alignment.centerLeft,
                 child: TextButton(
-                  onPressed: _handleForgotPassword,
-                  child: const Text('نسيت كلمة المرور؟',
-                      style: TextStyle(fontFamily: 'Cairo', color: Colors.blue)),
+                  onPressed: _isLoginLoading ? null : _handleForgotPassword,
+                  child: const Text(
+                    'نسيت كلمة المرور؟',
+                    style: TextStyle(fontFamily: 'Cairo', color: Colors.blue),
+                  ),
                 ),
               ),
               const SizedBox(height: 24),
@@ -195,8 +250,7 @@ class _AuthScreenState extends State<AuthScreen>
                     padding: const EdgeInsets.symmetric(vertical: 12),
                   ),
                   onPressed: _handleLogin,
-                  child: const Text('تسجيل الدخول',
-                      style: TextStyle(fontFamily: 'Cairo')),
+                  child: const Text('تسجيل الدخول', style: TextStyle(fontFamily: 'Cairo')),
                 ),
               ),
             ],
@@ -255,8 +309,7 @@ class _AuthScreenState extends State<AuthScreen>
                     padding: const EdgeInsets.symmetric(vertical: 12),
                   ),
                   onPressed: _handleRegister,
-                  child: const Text('إنشاء حساب',
-                      style: TextStyle(fontFamily: 'Cairo')),
+                  child: const Text('إنشاء حساب', style: TextStyle(fontFamily: 'Cairo')),
                 ),
               ),
             ],
@@ -265,6 +318,8 @@ class _AuthScreenState extends State<AuthScreen>
       ),
     );
   }
+
+  // ====== Validators & TextField ======
 
   String? _emailValidator(String? v) {
     if (v == null || v.trim().isEmpty) return 'أدخل البريد الإلكتروني';

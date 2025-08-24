@@ -1,11 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:flutter/foundation.dart' show kIsWeb, defaultTargetPlatform, TargetPlatform;
 import 'package:firebase_core/firebase_core.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 
+// Screens
 import 'screens/splash_screen.dart';
 import 'screens/auth_screen.dart';
 import 'screens/customer_list_screen.dart';
+
+// ✅ استورد ملف FlutterFire المولّد (تأكّد من المسار)
+import 'firebase_options.dart';
 
 /// مفاتيح عامة للتنقل وإظهار الرسائل من أي مكان
 final GlobalKey<NavigatorState> appNavigatorKey = GlobalKey<NavigatorState>();
@@ -14,8 +18,19 @@ final GlobalKey<ScaffoldMessengerState> appScaffoldMessengerKey = GlobalKey<Scaf
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // ✅ تهيئة Firebase قبل تشغيل التطبيق
-  await Firebase.initializeApp();
+  // ✅ تهيئة Firebase:
+  // - Android/iOS: بدون Options (يعتمد على google-services.json / GoogleService-Info.plist)
+  // - Web/Desktop: لازم نمرّر DefaultFirebaseOptions.currentPlatform
+  if (kIsWeb ||
+      defaultTargetPlatform == TargetPlatform.windows ||
+      defaultTargetPlatform == TargetPlatform.macOS ||
+      defaultTargetPlatform == TargetPlatform.linux) {
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
+  } else {
+    await Firebase.initializeApp();
+  }
 
   runApp(const MyApp());
 }
@@ -62,7 +77,7 @@ class MyApp extends StatelessWidget {
         '/home': (_) => const CustomerListScreen(),
       },
 
-      // ✅ (اختياري) بوابة المصادقة بدل SplashScreen
+      // ✅ (اختياري) بوابة المصادقة بدل SplashScreen — اتركه مُعلّق دون أقواس زائدة
       // home: StreamBuilder<User?>(
       //   stream: FirebaseAuth.instance.authStateChanges(),
       //   builder: (context, snap) {

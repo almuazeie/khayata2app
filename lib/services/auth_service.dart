@@ -36,10 +36,8 @@ class SimpleAuthException implements Exception {
         msg = 'محاولات كثيرة. يرجى المحاولة لاحقًا.';
         break;
       case 'operation-not-allowed':
-        msg = 'طريقة تسجيل الدخول هذه غير مفعلة.';
+        msg = 'طريقة تسجيل الدخول هذه غير مفعلة في الإعدادات.';
         break;
-
-    // أخطاء شائعة عند إرسال رابط إعادة التعيين
       case 'missing-email':
         msg = 'يرجى إدخال البريد الإلكتروني.';
         break;
@@ -50,6 +48,13 @@ class SimpleAuthException implements Exception {
         msg = 'اسم حزمة أندرويد مفقود في إعدادات الرابط.';
         break;
 
+    // حالات شائعة أخرى
+      case 'network-request-failed':
+        msg = 'لا يوجد اتصال بالإنترنت.';
+        break;
+      case 'requires-recent-login':
+        msg = 'نحتاج لإعادة تسجيل الدخول قبل تنفيذ هذا الإجراء.';
+        break;
       default:
         msg = e.message ?? 'حدث خطأ غير متوقع.';
     }
@@ -59,7 +64,10 @@ class SimpleAuthException implements Exception {
 
 /// خدمة المصادقة (Singleton)
 class AuthService {
-  AuthService._();
+  AuthService._() {
+    // اجعل رسائل Firebase (مثل رسائل التحقق) بالعربية
+    _auth.setLanguageCode('ar');
+  }
   static final AuthService instance = AuthService._();
   factory AuthService() => instance;
 
@@ -71,16 +79,20 @@ class AuthService {
   /// المستخدم الحالي (إن وجد)
   User? get currentUser => _auth.currentUser;
 
+  /// هل البريد مُفعّل؟
+  bool get isEmailVerified => _auth.currentUser?.emailVerified ?? false;
+
   /// تسجيل الدخول بالبريد وكلمة المرور
   Future<UserCredential> signInWithEmail({
     required String email,
     required String password,
   }) async {
     try {
-      return await _auth.signInWithEmailAndPassword(
+      final cred = await _auth.signInWithEmailAndPassword(
         email: email.trim(),
         password: password,
       );
+      return cred;
     } on FirebaseAuthException catch (e) {
       throw SimpleAuthException.fromFirebase(e);
     }
@@ -106,7 +118,7 @@ class AuthService {
     }
   }
 
-  /// إرسال رابط "نسيت كلمة المرور" (اسم مختصر مفضّل)
+  /// إرسال رابط "نسيت كلمة المرور"
   Future<void> resetPassword(String email) async {
     try {
       await _auth.sendPasswordResetEmail(email: email.trim());
@@ -115,15 +127,57 @@ class AuthService {
     }
   }
 
-  /// نفس السابقة للحفاظ على التوافق مع أي استدعاءات قديمة
+  /// للتوافق القديم
   Future<void> sendPasswordResetEmail(String email) => resetPassword(email);
+
+  /// إرسال رسالة تفعيل البريد للمستخدم الحالي
+  Future<void> sendEmailVerification() async {
+    try {
+      final user = _auth.currentUser;
+      if (user == null) {
+        throw const SimpleAuthException('no-user', 'لا يوجد مستخدم مسجّل حاليًا.');
+      }
+      await user.sendEmailVerification();
+    } on FirebaseAuthException catch (e) {
+      throw SimpleAuthException.fromFirebase(e);
+    }
+  }
+
+  /// إعادة تحميل بيانات المستخدم (لتحديث حالة التفعيل مثلاً)
+  Future<void> reloadUser() async {
+    try {
+      await _auth.currentUser?.reload();
+    } on FirebaseAuthException catch (e) {
+      throw SimpleAuthException.fromFirebase(e);
+    }
+  }
 
   /// تسجيل الخروج
   Future<void> signOut() async {
     await _auth.signOut();
   }
 
-  /// تحديث كلمة المرور (للمستخدم المسجّل)
+  /// إعادة المصادقة (ضرورية قبل بعض العمليات الحساسة)
+  Future<void> reauthenticate({
+    required String email,
+    required String password,
+  }) async {
+    final user = _auth.currentUser;
+    if (user == null) {
+      throw const SimpleAuthException('no-user', 'لا يوجد مستخدم مسجّل حاليًا.');
+    }
+    try {
+      final cred = EmailAuthProvider.credential(
+        email: email.trim(),
+        password: password,
+      );
+      await user.reauthenticateWithCredential(cred);
+    } on FirebaseAuthException catch (e) {
+      throw SimpleAuthException.fromFirebase(e);
+    }
+  }
+
+  /// تحديث كلمة المرور (قد يتطلب إعادة مصادقة)
   Future<void> updatePassword(String newPassword) async {
     try {
       final user = _auth.currentUser;
@@ -131,6 +185,19 @@ class AuthService {
         throw const SimpleAuthException('no-user', 'لا يوجد مستخدم مسجّل حاليًا.');
       }
       await user.updatePassword(newPassword);
+    } on FirebaseAuthException catch (e) {
+      throw SimpleAuthException.fromFirebase(e);
+    }
+  }
+
+  /// حذف الحساب (قد يتطلب إعادة مصادقة)
+  Future<void> deleteAccount() async {
+    try {
+      final user = _auth.currentUser;
+      if (user == null) {
+        throw const SimpleAuthException('no-user', 'لا يوجد مستخدم مسجّل حاليًا.');
+      }
+      await user.delete();
     } on FirebaseAuthException catch (e) {
       throw SimpleAuthException.fromFirebase(e);
     }
