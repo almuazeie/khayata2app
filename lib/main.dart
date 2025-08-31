@@ -1,26 +1,33 @@
+import 'dart:async';
+import 'dart:ui'; // لـ PlatformDispatcher.instance.onError
+
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
-import 'package:flutter/foundation.dart' show kIsWeb, defaultTargetPlatform, TargetPlatform;
+import 'package:flutter/foundation.dart'
+    show kIsWeb, defaultTargetPlatform, TargetPlatform;
+
 import 'package:firebase_core/firebase_core.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_crashlytics/firebase_crashlytics.dart';
+import 'package:firebase_app_check/firebase_app_check.dart'; // ✅ App Check
 
 // Screens
 import 'screens/splash_screen.dart';
 import 'screens/auth_screen.dart';
 import 'screens/customer_list_screen.dart';
 
-// ✅ استورد ملف FlutterFire المولّد (تأكّد من المسار)
+// ✅ استورد ملف FlutterFire المولّد
 import 'firebase_options.dart';
 
 /// مفاتيح عامة للتنقل وإظهار الرسائل من أي مكان
 final GlobalKey<NavigatorState> appNavigatorKey = GlobalKey<NavigatorState>();
-final GlobalKey<ScaffoldMessengerState> appScaffoldMessengerKey = GlobalKey<ScaffoldMessengerState>();
+final GlobalKey<ScaffoldMessengerState> appScaffoldMessengerKey =
+GlobalKey<ScaffoldMessengerState>();
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // ✅ تهيئة Firebase:
-  // - Android/iOS: بدون Options (يعتمد على google-services.json / GoogleService-Info.plist)
-  // - Web/Desktop: لازم نمرّر DefaultFirebaseOptions.currentPlatform
+  // ✅ تهيئة Firebase (كما هي)
   if (kIsWeb ||
       defaultTargetPlatform == TargetPlatform.windows ||
       defaultTargetPlatform == TargetPlatform.macOS ||
@@ -32,7 +39,42 @@ Future<void> main() async {
     await Firebase.initializeApp();
   }
 
-  runApp(const MyApp());
+  // ✅ تفعيل/تأكيد الـ Offline Persistence لـ Firestore
+  FirebaseFirestore.instance.settings = const Settings(
+    persistenceEnabled: true,
+  );
+
+  // ✅ App Check — Play Integrity لأندرويد / DeviceCheck للـ iOS
+  // (مغلفة بـ try لئلا تعيق التشغيل على المنصّات غير المدعومة)
+  try {
+    await FirebaseAppCheck.instance.activate(
+      androidProvider: AndroidProvider.playIntegrity,
+      appleProvider: AppleProvider.deviceCheck,
+      // على الويب يمكنك لاحقًا استخدام ReCaptchaV3/Enterprise بمفتاح من الكونسول.
+      // webProvider: ReCaptchaV3Provider('YOUR_RECAPTCHA_KEY'),
+    );
+  } catch (_) {
+    // نتجاهل أي خطأ تهيئة هنا حتى لا يمنع التشغيل أثناء التطوير
+  }
+
+  // =================== Crashlytics ===================
+  await FirebaseCrashlytics.instance.setCrashlyticsCollectionEnabled(true);
+
+  // التقاط أخطاء Flutter غير الممسوكة
+  FlutterError.onError = FirebaseCrashlytics.instance.recordFlutterError;
+
+  // التقاط الأخطاء العامة/غير المتزامنة
+  PlatformDispatcher.instance.onError = (error, stack) {
+    FirebaseCrashlytics.instance.recordError(error, stack, fatal: true);
+    return true;
+  };
+
+  // تشغيل التطبيق داخل runZonedGuarded لالتقاط أي استثناءات إضافية
+  runZonedGuarded(
+        () => runApp(const MyApp()),
+        (error, stack) =>
+        FirebaseCrashlytics.instance.recordError(error, stack, fatal: true),
+  );
 }
 
 class MyApp extends StatelessWidget {
@@ -77,7 +119,7 @@ class MyApp extends StatelessWidget {
         '/home': (_) => const CustomerListScreen(),
       },
 
-      // ✅ (اختياري) بوابة المصادقة بدل SplashScreen — اتركه مُعلّق دون أقواس زائدة
+      // ✅ (اختياري) بوابة المصادقة
       // home: StreamBuilder<User?>(
       //   stream: FirebaseAuth.instance.authStateChanges(),
       //   builder: (context, snap) {

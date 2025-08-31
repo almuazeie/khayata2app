@@ -1,3 +1,5 @@
+// lib/services/auth_service.dart
+import 'dart:async'; // ✅ لازم لـ Completer/Timer
 import 'package:firebase_auth/firebase_auth.dart';
 
 /// استثناء مبسّط برسالة عربية مفهومة
@@ -48,6 +50,23 @@ class SimpleAuthException implements Exception {
         msg = 'اسم حزمة أندرويد مفقود في إعدادات الرابط.';
         break;
 
+    // أخطاء شائعة في مصادقة الجوال
+      case 'invalid-phone-number':
+        msg = 'رقم الجوال غير صالح. أدخل الرقم بصيغة دولية مثل +9665xxxxxxx.';
+        break;
+      case 'invalid-verification-code':
+        msg = 'رمز التحقق غير صحيح.';
+        break;
+      case 'session-expired':
+        msg = 'انتهت صلاحية رمز التحقق. أعد إرسال الرمز.';
+        break;
+      case 'quota-exceeded':
+        msg = 'تم تجاوز حد الرسائل مؤقتًا. حاول لاحقًا.';
+        break;
+      case 'captcha-check-failed':
+        msg = 'فشل التحقق الأمني. أعد المحاولة.';
+        break;
+
     // حالات شائعة أخرى
       case 'network-request-failed':
         msg = 'لا يوجد اتصال بالإنترنت.';
@@ -62,6 +81,13 @@ class SimpleAuthException implements Exception {
   }
 }
 
+/// جلسة مصادقة الجوال بعد إرسال الرمز (تفيد في تأكيد الـ OTP)
+class PhoneAuthSession {
+  final String verificationId;
+  final int? resendToken;
+  const PhoneAuthSession(this.verificationId, this.resendToken);
+}
+
 /// خدمة المصادقة (Singleton)
 class AuthService {
   AuthService._() {
@@ -73,32 +99,54 @@ class AuthService {
 
   final FirebaseAuth _auth = FirebaseAuth.instance;
 
-  /// مراقبة تغيّر حالة المصادقة
+  // ===================== Helpers للكشف/التهيئة =====================
+
+  static final RegExp _emailRe = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$');
+  static final RegExp _digitsRe = RegExp(r'^\d{8,15}$');
+  static final RegExp _intlPhoneRe = RegExp(r'^\+\d{6,15}$');
+
+  /// هل النص بريد؟
+  bool isEmail(String v) => _emailRe.hasMatch(v.trim());
+
+  /// هل النص يبدو رقم جوال؟ (صيغة دولية +أرقام أو أرقام فقط بطول مناسب)
+  bool isLikelyPhone(String v) {
+    final s = v.trim().replaceAll(' ', '');
+    return _intlPhoneRe.hasMatch(s) || _digitsRe.hasMatch(s);
+  }
+
+  /// تطبيع رقم الجوال لصيغة E.164 مبسّطة.
+  /// مثال للسعودية: 05xxxxxxxx → +9665xxxxxxxx
+  String normalizePhone(String raw, {String defaultCountryDialCode = '+966'}) {
+    String s = raw.trim().replaceAll(RegExp(r'\s+'), '');
+    if (s.startsWith('+')) return s;              // مسبقًا دولي
+    if (s.startsWith('00')) return '+${s.substring(2)}';
+    if (s.startsWith('05')) return '$defaultCountryDialCode${s.substring(1)}';
+    if (s.startsWith('5'))  return '$defaultCountryDialCode$s';
+    return '$defaultCountryDialCode$s';
+  }
+
+  // ===================== مراقبة الحالة =====================
+
   Stream<User?> get authStateChanges => _auth.authStateChanges();
-
-  /// المستخدم الحالي (إن وجد)
   User? get currentUser => _auth.currentUser;
-
-  /// هل البريد مُفعّل؟
   bool get isEmailVerified => _auth.currentUser?.emailVerified ?? false;
 
-  /// تسجيل الدخول بالبريد وكلمة المرور
+  // ===================== البريد/كلمة المرور =====================
+
   Future<UserCredential> signInWithEmail({
     required String email,
     required String password,
   }) async {
     try {
-      final cred = await _auth.signInWithEmailAndPassword(
+      return await _auth.signInWithEmailAndPassword(
         email: email.trim(),
         password: password,
       );
-      return cred;
     } on FirebaseAuthException catch (e) {
       throw SimpleAuthException.fromFirebase(e);
     }
   }
 
-  /// إنشاء حساب جديد بالبريد وكلمة المرور
   Future<UserCredential> signUpWithEmail({
     required String email,
     required String password,
@@ -118,7 +166,6 @@ class AuthService {
     }
   }
 
-  /// إرسال رابط "نسيت كلمة المرور"
   Future<void> resetPassword(String email) async {
     try {
       await _auth.sendPasswordResetEmail(email: email.trim());
@@ -127,10 +174,6 @@ class AuthService {
     }
   }
 
-  /// للتوافق القديم
-  Future<void> sendPasswordResetEmail(String email) => resetPassword(email);
-
-  /// إرسال رسالة تفعيل البريد للمستخدم الحالي
   Future<void> sendEmailVerification() async {
     try {
       final user = _auth.currentUser;
@@ -143,7 +186,6 @@ class AuthService {
     }
   }
 
-  /// إعادة تحميل بيانات المستخدم (لتحديث حالة التفعيل مثلاً)
   Future<void> reloadUser() async {
     try {
       await _auth.currentUser?.reload();
@@ -152,12 +194,93 @@ class AuthService {
     }
   }
 
-  /// تسجيل الخروج
+  // ===================== الجوال / OTP =====================
+
+  /// يرسل SMS ويُرجع بيانات الجلسة (verificationId + token لإعادة الإرسال).
+  Future<PhoneAuthSession> requestSmsCode(
+      String rawPhone, {
+        int? forceResendingToken,
+        Duration timeout = const Duration(seconds: 60),
+      }) async {
+    final phone = normalizePhone(rawPhone);
+    try {
+      String? vId;
+      int? resend;
+      final completer = Completer<PhoneAuthSession>();
+
+      await _auth.verifyPhoneNumber(
+        phoneNumber: phone,
+        timeout: timeout,
+        forceResendingToken: forceResendingToken,
+        verificationCompleted: (PhoneAuthCredential cred) async {
+          // قد يتم التحقق التلقائي — نحاول تسجيل الدخول مباشرة
+          try {
+            await _auth.signInWithCredential(cred);
+            // نكمل الجلسة حتى لو تم الدخول تلقائياً
+            if (!completer.isCompleted) {
+              completer.complete(PhoneAuthSession('auto', resend));
+            }
+          } catch (e) {
+            if (!completer.isCompleted) {
+              completer.completeError(SimpleAuthException('auto-verify-failed', e.toString()));
+            }
+          }
+        },
+        verificationFailed: (FirebaseAuthException e) {
+          if (!completer.isCompleted) {
+            completer.completeError(SimpleAuthException.fromFirebase(e));
+          }
+        },
+        codeSent: (String verificationId, int? resendToken) {
+          vId = verificationId;
+          resend = resendToken;
+          if (!completer.isCompleted) {
+            completer.complete(PhoneAuthSession(vId!, resend));
+          }
+        },
+        codeAutoRetrievalTimeout: (String verificationId) {
+          vId ??= verificationId;
+          if (!completer.isCompleted) {
+            completer.complete(PhoneAuthSession(vId!, resend));
+          }
+        },
+      );
+
+      return await completer.future;
+    } on FirebaseAuthException catch (e) {
+      throw SimpleAuthException.fromFirebase(e);
+    }
+  }
+
+  /// تأكيد رمز الـ SMS وتسجيل الدخول
+  Future<UserCredential> confirmSmsCode({
+    required String verificationId,
+    required String smsCode,
+  }) async {
+    try {
+      final cred = PhoneAuthProvider.credential(
+        verificationId: verificationId,
+        smsCode: smsCode.trim(),
+      );
+      return await _auth.signInWithCredential(cred);
+    } on FirebaseAuthException catch (e) {
+      throw SimpleAuthException.fromFirebase(e);
+    }
+  }
+
+  /// (اختياري) تحديث اسم العرض بعد نجاح الدخول بالجوال
+  Future<void> updateDisplayName(String name) async {
+    final user = _auth.currentUser;
+    if (user == null) return;
+    await user.updateDisplayName(name.trim());
+  }
+
+  // ===================== عمليات عامة =====================
+
   Future<void> signOut() async {
     await _auth.signOut();
   }
 
-  /// إعادة المصادقة (ضرورية قبل بعض العمليات الحساسة)
   Future<void> reauthenticate({
     required String email,
     required String password,
@@ -177,7 +300,6 @@ class AuthService {
     }
   }
 
-  /// تحديث كلمة المرور (قد يتطلب إعادة مصادقة)
   Future<void> updatePassword(String newPassword) async {
     try {
       final user = _auth.currentUser;
@@ -190,7 +312,6 @@ class AuthService {
     }
   }
 
-  /// حذف الحساب (قد يتطلب إعادة مصادقة)
   Future<void> deleteAccount() async {
     try {
       final user = _auth.currentUser;

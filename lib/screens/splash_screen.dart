@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:firebase_crashlytics/firebase_crashlytics.dart' as crash; // اختياري لوج
 import 'auth_screen.dart';
 
 class SplashScreen extends StatefulWidget {
@@ -10,42 +11,70 @@ class SplashScreen extends StatefulWidget {
 }
 
 class _SplashScreenState extends State<SplashScreen> {
+  Timer? _timer;
+  bool _navigated = false; // يمنع تكرار الانتقال
+
   @override
   void initState() {
     super.initState();
-    // ⏳ الانتقال بعد 2.5 ثانية إلى شاشة تسجيل الدخول
-    Timer(const Duration(seconds: 3), () {
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => const AuthScreen()),
-      );
-    });
+
+    // لوج اختياري في Crashlytics يفيد بالتتبّع
+    try {
+      crash.FirebaseCrashlytics.instance.setCustomKey('screen', 'Splash');
+      crash.FirebaseCrashlytics.instance.log('SplashScreen opened');
+    } catch (_) {
+      // تجاهل لو Crashlytics غير مفعّل
+    }
+
+    // ⏳ الانتقال بعد 3 ثوانٍ إلى شاشة تسجيل الدخول
+    _timer = Timer(const Duration(seconds: 3), _goNext);
+  }
+
+  void _goNext() {
+    if (!mounted || _navigated) return;
+    _navigated = true;
+
+    // أبقينا نفس السلوك القديم (تقدر تستخدم الراوت المسمّى إن حبيت)
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(builder: (_) => const AuthScreen()),
+      // أو:
+      // Navigator.of(context).pushReplacementNamed('/auth');
+    );
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFFF1F5F9), // رمادي فاتح جدًا
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            // 🧵 شعار أو رمز
-            const Icon(Icons.design_services, size: 90, color: Colors.blue),
-            const SizedBox(height: 20),
-            // 🧵 نص الترحيب
-            const Text(
-              'تطبيق الخياطة',
-              style: TextStyle(
-                fontSize: 28,
-                fontWeight: FontWeight.bold,
-                fontFamily: 'Cairo',
-                color: Colors.black87,
+    // منع الرجوع من شاشة السلاش
+    return WillPopScope(
+      onWillPop: () async => false,
+      child: Scaffold(
+        backgroundColor: const Color(0xFFF1F5F9), // رمادي فاتح جدًا
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: const [
+              Icon(Icons.design_services, size: 90, color: Colors.blue),
+              SizedBox(height: 20),
+              Text(
+                'تطبيق الخياطة',
+                style: TextStyle(
+                  fontSize: 28,
+                  fontWeight: FontWeight.bold,
+                  fontFamily: 'Cairo',
+                  color: Colors.black87,
+                ),
               ),
-            ),
-            const SizedBox(height: 10),
-            const CircularProgressIndicator(),
-          ],
+              SizedBox(height: 10),
+              CircularProgressIndicator(),
+            ],
+          ),
         ),
       ),
     );

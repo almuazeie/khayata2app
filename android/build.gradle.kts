@@ -1,20 +1,15 @@
-allprojects {
-    repositories {
-        google()
-        mavenCentral()
-    }
-}
+// android/build.gradle.kts
+// ملاحظة: لا نضيف أي repositories هنا — تُدار في settings.gradle.kts
 
-val newBuildDir: Directory = rootProject.layout.buildDirectory.dir("../../build").get()
-rootProject.layout.buildDirectory.value(newBuildDir)
+val newBuildDir = rootProject.layout.buildDirectory.dir("../../build").get()
+rootProject.layout.buildDirectory.set(newBuildDir)
 
 subprojects {
-    val newSubprojectBuildDir: Directory = newBuildDir.dir(project.name)
-    project.layout.buildDirectory.value(newSubprojectBuildDir)
-}
+    // اجعل مجلد build لكل موديول تحت build/ في جذر المشروع
+    layout.buildDirectory.set(newBuildDir.dir(name))
 
-subprojects {
-    project.evaluationDependsOn(":app")
+    // تأكّد أن تقييم الموديولات يعتمد على :app أولًا
+    evaluationDependsOn(":app")
 }
 
 tasks.register<Delete>("clean") {
